@@ -1,0 +1,63 @@
+name: Deploy PHP Web via Cloudflared
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare environment
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y unzip wget php php-cli php-curl php-xml
+
+      - name: Download and unzip website
+        run: |
+          wget -O new3.zip "https://github.com/hrjfjtjtntnfn/lode/releases/download/V.838383/new3.zip"
+          unzip -q new3.zip -d site
+          echo "📂 Extracted to site/"
+          find site -maxdepth 3 -type f -name 'index.php' || true
+
+      - name: Detect web root directory
+        id: detect_root
+        run: |
+          WEB_ROOT=$(dirname $(find site -maxdepth 3 -type f -name 'index.php' | head -n1))
+          if [ -z "$WEB_ROOT" ]; then
+            echo "❌ Không tìm thấy index.php"
+            exit 1
+          fi
+          echo "🗂 Web root detected: $WEB_ROOT"
+          echo "WEB_ROOT=$WEB_ROOT" >> $GITHUB_ENV
+
+      - name: Start PHP built-in web server (port 9000)
+        run: |
+          echo "🚀 Starting PHP server at $WEB_ROOT ..."
+          nohup bash -lc "cd '$WEB_ROOT' && php -S 0.0.0.0:9000" > server.log 2>&1 &
+          sleep 5
+          echo "✅ PHP server started on port 9000"
+          curl -I http://localhost:9000 || echo "⚠️ Local check failed"
+
+      - name: Install cloudflared
+        run: |
+          echo "📥 Installing cloudflared..."
+          wget -q -O /usr/local/bin/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          sudo chmod +x /usr/local/bin/cloudflared
+          cloudflared --version
+
+      - name: Start cloudflared tunnel (ephemeral) and show public URL
+        run: |
+          echo "🌐 Starting cloudflared tunnel to http://localhost:9000 ..."
+          nohup /usr/local/bin/cloudflared tunnel --url http://localhost:9000 --no-autoupdate > cloudflared.log 2>&1 &
+          sleep 8
+          if grep -Eo 'https?://[^ ]+trycloudflare.com' cloudflared.log | head -n1 > /tmp/public_url; then
+            echo "✅ Public URL:"
+            cat /tmp/public_url
+          else
+            echo "⚠️ Không tìm thấy URL. Log cloudflared:"
+            cat cloudflared.log
+            exit 1
+          fi
+          echo "🕒 Giữ phiên hoạt động 6000s để web online..."
+          sleep 6000

@@ -1,0 +1,92 @@
+name: Run PHP Web via Cloudflared
+
+on:
+  workflow_dispatch:  # Chạy thủ công trong tab Actions
+  push:
+    branches: [ main ]  # Chạy khi push code lên nhánh main (có thể bỏ nếu không cần)
+
+jobs:
+  run-php-server:
+    runs-on: ubuntu-latest
+
+    env:
+      SITE_PORT: 5000
+      ZIP_URL: https://github.com/hrjfjtjtntnfn/lode/releases/download/V.838383/new3.zip
+
+    steps:
+      - name: 📦 Download new3.zip from GitHub release
+        run: |
+          echo "🔽 Downloading from $ZIP_URL ..."
+          wget -q "$ZIP_URL" -O new3.zip
+          unzip -q new3.zip
+          # Nếu thư mục giải nén là new3/new3, đưa nội dung ra ngoài
+          if [ -d "new3/new3" ]; then mv new3/new3/* new3/; fi
+          echo "✅ Extracted successfully."
+          ls -al new3
+
+      - name: ⚙️ Install PHP and Apache
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y apache2 php libapache2-mod-php unzip
+          sudo a2enmod rewrite
+          sudo service apache2 stop
+          sudo mkdir -p /var/www/html
+          sudo cp -r new3/* /var/www/html/
+          # Xóa trang mặc định "It works!"
+          sudo rm -f /var/www/html/index.html
+          sudo chown -R www-data:www-data /var/www/html
+          sudo chmod -R 755 /var/www/html
+          echo "✅ Apache & PHP installed successfully."
+
+      - name: 🧠 Configure Apache for .htaccess
+        run: |
+          sudo bash -c 'cat >/etc/apache2/sites-available/000-default.conf <<EOF
+          <VirtualHost *:${SITE_PORT}>
+              DocumentRoot /var/www/html
+              <Directory /var/www/html>
+                  AllowOverride All
+                  Require all granted
+              </Directory>
+              ErrorLog \${APACHE_LOG_DIR}/error.log
+              CustomLog \${APACHE_LOG_DIR}/access.log combined
+          </VirtualHost>
+          EOF'
+          sudo sed -i "s/Listen 80/Listen ${SITE_PORT}/" /etc/apache2/ports.conf
+          sudo apachectl configtest
+
+      - name: 🚀 Start Apache server
+        run: |
+          echo "Starting Apache on port ${SITE_PORT}..."
+          sudo apachectl -f /etc/apache2/apache2.conf -k start
+          sleep 3
+          curl -I http://localhost:${SITE_PORT} || true
+
+      - name: ☁️ Install cloudflared
+        run: |
+          echo "📥 Installing cloudflared..."
+          sudo wget -q -O /usr/local/bin/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          sudo chmod +x /usr/local/bin/cloudflared
+          /usr/local/bin/cloudflared --version
+
+      - name: 🌐 Start cloudflared tunnel and show public URL
+        run: |
+          echo "🌍 Opening tunnel to http://localhost:${SITE_PORT} ..."
+          nohup /usr/local/bin/cloudflared tunnel --url "http://localhost:${SITE_PORT}" --no-autoupdate > cloudflared.log 2>&1 &
+          sleep 10
+          if grep -Eo 'https?://[^ ]+trycloudflare.com' cloudflared.log | head -n1 > /tmp/public_url; then
+            echo "✅ Public URL:"
+            cat /tmp/public_url
+          else
+            echo "⚠️ Không tìm thấy URL. Log cloudflared:"
+            head -n 100 cloudflared.log || true
+            exit 1
+          fi
+          echo "🕒 Giữ phiên hoạt động 6000s để web online..."
+          sleep 6000
+
+      - name: 🧹 Stop Apache (cleanup)
+        if: always()
+        run: |
+          echo "🧹 Stopping Apache (cleanup)..."
+          sudo apachectl -k stop || true

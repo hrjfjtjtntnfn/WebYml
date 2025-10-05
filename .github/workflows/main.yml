@@ -1,0 +1,84 @@
+name: Deploy new3 with Apache + cloudflared
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SITE_PORT: 9000
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y apache2 php unzip wget procps
+
+      - name: Download new3.zip
+        run: |
+          wget -q -O new3.zip "https://github.com/hrjfjtjtntnfn/lode/releases/download/V.838383/new3.zip"
+
+      - name: Extract new3.zip
+        run: |
+          unzip -o new3.zip -d new3
+
+      - name: Write apache httpd.conf
+        run: |
+          sudo mkdir -p /var/log/apache2
+          sudo tee /etc/apache2/httpd.conf > /dev/null <<EOF
+ServerRoot "/etc/apache2"
+Listen ${SITE_PORT}
+
+LoadModule mpm_prefork_module /usr/lib/apache2/modules/mod_mpm_prefork.so
+AddType application/x-httpd-php .php
+
+ServerAdmin you@example.com
+ServerName localhost:${SITE_PORT}
+
+DocumentRoot "${GITHUB_WORKSPACE}/new3"
+<Directory "${GITHUB_WORKSPACE}/new3">
+  Options Indexes FollowSymLinks
+  AllowOverride None
+  Require all granted
+</Directory>
+
+<IfModule dir_module>
+  DirectoryIndex index.html index.php
+</IfModule>
+
+ErrorLog "/var/log/apache2/error_log"
+LogLevel warn
+CustomLog "/var/log/apache2/access_log" common
+EOF
+
+      - name: Start Apache
+        run: |
+          sudo apachectl -f /etc/apache2/httpd.conf -k start
+          sleep 3
+          curl -I "http://localhost:${SITE_PORT}" || true
+
+      - name: Install cloudflared
+        run: |
+          wget -q -O /usr/local/bin/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          sudo chmod +x /usr/local/bin/cloudflared
+          /usr/local/bin/cloudflared --version
+
+      - name: Start cloudflared tunnel (ephemeral)
+        run: |
+          nohup /usr/local/bin/cloudflared tunnel --url "http://localhost:${SITE_PORT}" --no-autoupdate > cloudflared.log 2>&1 &
+          sleep 8
+          if grep -Eo 'https?://[^ ]+trycloudflare.com' cloudflared.log | head -n1 > /tmp/public_url; then
+            echo "Public URL:"
+            cat /tmp/public_url
+          else
+            echo "Không tìm thấy URL"
+            cat cloudflared.log
+            exit 1
+          fi
+          echo "Web sẽ chạy 6000s..."
+          sleep 6000

